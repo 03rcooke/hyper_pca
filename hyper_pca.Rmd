@@ -1,7 +1,7 @@
 ---
 title: "Projected losses of global mammal and bird ecological strategies"
 author: "Robert Cooke"
-date: "04/12/2018"
+date: "08/01/2019"
 output: html_notebook
 ---
 
@@ -38,7 +38,7 @@ pacman::p_load(dplyr, plyr, readr, tibble, FD, ade4, cowplot, mice, reshape2, ti
 ## Step 1: load ##
 #### --------------------------------------------------------------
 
-#### load data
+#### Load data
 
 ```{r}
 # load: trait data
@@ -56,7 +56,7 @@ bi_class <- readRDS("data/df_bi_class.rds")
 ## Step 2: diet PCoA ##
 #### --------------------------------------------------------------
 
-#### calculate synthetic diet trait (principal component from a PCoA of 10 diet categories)
+#### Calculate synthetic diet trait (principal component from a PCoA of 10 diet categories)
 
 ```{r}
 diet_all <- trait %>% 
@@ -136,9 +136,9 @@ pcoa_diet
 ## Step 3: trait imputation ##
 #### --------------------------------------------------------------
 
-#### describe
+#### Impute missing trait data using the traits themselves and phylogenetic eigenvectors
 
-#### set up trait data (add diet PCoA axis)
+#### Set up trait data (add diet PCoA axis)
 
 ```{r}
 tr <- dplyr::select(trait, -contains("diet")) %>% 
@@ -150,9 +150,9 @@ tr <- dplyr::select(trait, -contains("diet")) %>%
   dplyr::select(everything(), diet_pc1 = A1, class, -A2)
 ```
 
-#### need to do imputation separately for mammals and birds, as we are using separate trees
+#### Need to do imputation separately for mammals and birds, as we are using separate trees
 
-#### mammals
+#### Mammal trait imputation
 
 ```{r}
 tr_mam <- filter(tr, class == "Mammalia") %>% 
@@ -195,7 +195,7 @@ saveRDS(tr_mi_mam, "data/df_tr_mi_mam.rds")
 
 ```
 
-#### birds
+#### Bird trait imputation
 
 ```{r}
 tr_birds <- filter(tr, class == "Aves") %>% 
@@ -237,7 +237,7 @@ saveRDS(tr_mi_birds, "data/df_tr_mi_birds.rds")
 # list of multiple imputed dataframes for birds
 ```
 
-#### combine mammal and bird trait data
+#### Combine mammal and bird complete trait data
 
 ```{r}
 # combine mammals and birds
@@ -311,31 +311,12 @@ pc_mi_d1 <- pc_mi_d1 %>%
   tidyr::gather(key, value, -binomial, -mi) %>% 
   tidyr::unite(col, key, mi) %>% 
   tidyr::spread(col, value) %>% 
-  # calculate mean per species for Comp.1
+  # calculate mean per species for principal components
   dplyr::mutate(Comp.1_mean = apply(dplyr::select(., contains("Comp.1")), 1, mean)) %>% 
-  # calculate variance for Comp.1
-  dplyr::mutate(Comp.1_B = apply(dplyr::select(., contains("Comp.1")), 1, var)) %>% 
-  # calculate Rubin's T for Comp.1
-  dplyr::mutate(Comp.1_T = Comp.1_B + Comp.1_B/25) %>% 
-  # standardize Rubin's T for Comp.1
-  dplyr::mutate(Comp.1_T_std = rescale3(-Comp.1_T)) %>% 
-  # repeat for other principal components
   dplyr::mutate(Comp.2_mean = apply(dplyr::select(., contains("Comp.2")), 1, mean)) %>% 
-  dplyr::mutate(Comp.2_B = apply(dplyr::select(., contains("Comp.2")), 1, var)) %>% 
-  dplyr::mutate(Comp.2_T = Comp.2_B + Comp.2_B/25) %>% 
-  dplyr::mutate(Comp.2_T_std = rescale3(-Comp.2_T)) %>% 
   dplyr::mutate(Comp.3_mean = apply(dplyr::select(., contains("Comp.3")), 1, mean)) %>% 
-  dplyr::mutate(Comp.3_B = apply(dplyr::select(., contains("Comp.3")), 1, var)) %>% 
-  dplyr::mutate(Comp.3_T = Comp.3_B + Comp.3_B/25) %>% 
-  dplyr::mutate(Comp.3_T_std = rescale3(-Comp.3_T)) %>% 
   dplyr::mutate(Comp.4_mean = apply(dplyr::select(., contains("Comp.4")), 1, mean)) %>% 
-  dplyr::mutate(Comp.4_B = apply(dplyr::select(., contains("Comp.4")), 1, var)) %>% 
-  dplyr::mutate(Comp.4_T = Comp.4_B + Comp.4_B/25) %>% 
-  dplyr::mutate(Comp.4_T_std = rescale3(-Comp.4_T)) %>% 
-  dplyr::mutate(Comp.5_mean = apply(dplyr::select(., contains("Comp.5")), 1, mean)) %>% 
-  dplyr::mutate(Comp.5_B = apply(dplyr::select(., contains("Comp.5")), 1, var)) %>% 
-  dplyr::mutate(Comp.5_T = Comp.5_B + Comp.5_B/25) %>% 
-  dplyr::mutate(Comp.5_T_std = rescale3(-Comp.5_T))
+  dplyr::mutate(Comp.5_mean = apply(dplyr::select(., contains("Comp.5")), 1, mean))
 
 # loadings
 pcload_mi_d1 <- lapply(1:25, function(x) {
@@ -348,35 +329,16 @@ pcload_mi_d1 <- lapply(1:25, function(x) {
   dplyr::bind_rows()
 
 pcload_mi_d1 <- pcload_mi_d1 %>% 
-    # convert long to wide
+  # convert long to wide
   tidyr::gather(key, value, -trait, -mi) %>% 
   tidyr::unite(col, key, mi) %>% 
   tidyr::spread(col, value) %>% 
-  # calculate mean per species for Comp.1
+  # calculate mean per species for principal components
   dplyr::mutate(Comp.1_mean = apply(dplyr::select(., contains("Comp.1")), 1, mean)) %>% 
-  # calculate variance for Comp.1
-  dplyr::mutate(Comp.1_B = apply(dplyr::select(., contains("Comp.1")), 1, var)) %>% 
-  # calcualte Rubin's T for Comp.1
-  dplyr::mutate(Comp.1_T = Comp.1_B + Comp.1_B/25) %>% 
-  # standardize Rubin's T for Comp.1
-  dplyr::mutate(Comp.1_T_std = rescale3(-Comp.1_T)) %>% 
-  # repeat for other principal components
   dplyr::mutate(Comp.2_mean = apply(dplyr::select(., contains("Comp.2")), 1, mean)) %>% 
-  dplyr::mutate(Comp.2_B = apply(dplyr::select(., contains("Comp.2")), 1, var)) %>% 
-  dplyr::mutate(Comp.2_T = Comp.2_B + Comp.2_B/25) %>% 
-  dplyr::mutate(Comp.2_T_std = rescale3(-Comp.2_T)) %>% 
   dplyr::mutate(Comp.3_mean = apply(dplyr::select(., contains("Comp.3")), 1, mean)) %>% 
-  dplyr::mutate(Comp.3_B = apply(dplyr::select(., contains("Comp.3")), 1, var)) %>% 
-  dplyr::mutate(Comp.3_T = Comp.3_B + Comp.3_B/25) %>% 
-  dplyr::mutate(Comp.3_T_std = rescale3(-Comp.3_T)) %>% 
   dplyr::mutate(Comp.4_mean = apply(dplyr::select(., contains("Comp.4")), 1, mean)) %>% 
-  dplyr::mutate(Comp.4_B = apply(dplyr::select(., contains("Comp.4")), 1, var)) %>% 
-  dplyr::mutate(Comp.4_T = Comp.4_B + Comp.4_B/25) %>% 
-  dplyr::mutate(Comp.4_T_std = rescale3(-Comp.4_T)) %>% 
-  dplyr::mutate(Comp.5_mean = apply(dplyr::select(., contains("Comp.5")), 1, mean)) %>% 
-  dplyr::mutate(Comp.5_B = apply(dplyr::select(., contains("Comp.5")), 1, var)) %>% 
-  dplyr::mutate(Comp.5_T = Comp.5_B + Comp.5_B/25) %>% 
-  dplyr::mutate(Comp.5_T_std = rescale3(-Comp.5_T)) 
+  dplyr::mutate(Comp.5_mean = apply(dplyr::select(., contains("Comp.5")), 1, mean))
 
 # scalar to adjust arrow size
 sc_mi <- 7
@@ -413,9 +375,12 @@ cl_50_mi_d1 <- cl(df = den_mi_d1, prob = 0.50)
 cl_95_mi_d1 <- cl(df = den_mi_d1, prob = 0.95)
 # 0.99 probability kernel
 cl_99_mi_d1 <- cl(df = den_mi_d1, prob = 0.99)
+
+# save principal component data
+write.csv()
 ```
 
-#### pca plot
+#### PCA plot
 
 ```{r}
 # colour palette
@@ -439,7 +404,7 @@ pca_plot_mi_d1 <- ggplot(dcc_mi_d1, aes(x = Var1, y = Var2)) +
   geom_segment(data = pcload_mi_d1_sc, aes(x = 0, y = 0, xend = -Comp.1_mean, yend = -Comp.2_mean), lty = 5, colour = "darkgrey") +
   # add arrow labels
   geom_text(data = pcload_mi_d1_sc, aes(x = Comp.1_mean, y = Comp.2_mean, label = trait), size = 6, nudge_x = c(0, 0, 0, 0, -0.2), nudge_y = c(0.2, -0.2, -0.2, -0.2, 0.2)) +
-  # axis labels
+  # axis labels - see comp_var
   labs(x = "PC1 (34.1%)", y = "PC2 (26.0%)") +
   # edit plot
   theme(panel.grid.major = element_blank(),
@@ -456,7 +421,7 @@ pca_plot_mi_d1
 ## Step 5: hypervolumes ##
 #### --------------------------------------------------------------
 
-#### use single randomly selected trait imputation dataset
+#### Use single randomly selected trait imputation dataset
 
 ```{r}
 # z-transform trait data
@@ -470,7 +435,7 @@ tr_mi_z_d1 <- tr_mi[[2]] %>%
   dplyr::select(-diet_pc2)
 ```
 
-#### observed hypervolume
+#### Observed hypervolume
 
 ```{r}
 # calculate observed hypervolume
@@ -487,29 +452,29 @@ obs_hyper_full_mi <- readRDS("data/hv_obs_hyper.rds")
 obs_hyper_mi <- obs_hyper_full_mi@Volume
 ```
 
-#### number of permutations for nulls
+#### Number of permutations for nulls
 
 ```{r}
 # number of permutations
 npermute <- 999
 ```
 
-#### null model 1 (see Diaz et al., 2016)
+#### Null model 1 (see Diaz et al., 2016)
 
 ```{r}
 # set up null trait data
 nullt1_mi <- replicate(npermute, apply(tr_mi_z_d1, 2, function(x) runif(nrow(tr_mi_z_d1), min = min(x), max = max(x))), simplify = FALSE)
 
 # simulate null hypervolumes
-#sim_hyper1_mi <- lapply(nullt1_mi, hypervolume_svm)
+sim_hyper1_mi <- lapply(nullt1_mi, hypervolume_svm)
 
 # 39 secs per hypervolume (11 hours for 999 hypervolumes)
 
 # save: sim_hyper1_mi
-#saveRDS(sim_hyper1_mi, "data/df_sim_hyper1_mi.rds")
+saveRDS(sim_hyper1_mi, "data/df_sim_hyper1_mi.rds")
 
-# load: sim_hyper1_mi
-sim_hyper1_mi <- readRDS("data/df_sim_hyper1_mi.rds")
+# load: sim_hyper1_mi (not included on Github as the file is too big)
+#sim_hyper1_mi <- readRDS("data/df_sim_hyper1_mi.rds")
 
 # null hypervolume volumes
 sim_vol1_mi <- sapply(sim_hyper1_mi, function(x) return(x@Volume))
@@ -519,7 +484,7 @@ rtest_hyper1_mi <- ade4::as.randtest(obs = obs_hyper_mi, sim = sim_vol1_mi, alte
 rtest_hyper1_mi
 ```
 
-#### null model 2
+#### Null model 2 (see Diaz et al., 2016)
 
 ```{r}
 # set up null trait data
@@ -529,15 +494,15 @@ nullt2_mi <- replicate(npermute, scale(matrix(rnorm(ncol(tr_mi_z_d1) * nrow(tr_m
 nullt2_mi <- lapply(nullt2_mi, function(x) {colnames(x) <- colnames(tr_mi_z_d1); x})
 
 # simulate null hypervolumes
-#sim_hyper2_mi <- lapply(nullt2_mi, hypervolume_svm)
+sim_hyper2_mi <- lapply(nullt2_mi, hypervolume_svm)
 
 # 145 secs per hypervolume (40 hours for 999)
 
 # save: sim_hyper2_mi
-#saveRDS(sim_hyper2_mi, "data/df_sim_hyper2_mi.rds")
+saveRDS(sim_hyper2_mi, "data/df_sim_hyper2_mi.rds")
 
-# load: sim_hyper2_mi
-sim_hyper2_mi <- readRDS("data/df_sim_hyper2_mi.rds")
+# load: sim_hyper2_mi (not included on Github as the file is too big)
+#sim_hyper2_mi <- readRDS("data/df_sim_hyper2_mi.rds")
 
 # null hypervolume volumes
 sim_vol2_mi <- sapply(sim_hyper2_mi, function(x) return(x@Volume))
@@ -547,22 +512,22 @@ rtest_hyper2_mi <- ade4::as.randtest(obs = obs_hyper_mi, sim = sim_vol2_mi, alte
 rtest_hyper2_mi
 ```
 
-#### null model 3
+#### Null model 3 (see Diaz et al., 2016)
 
 ```{r}
 # set up null trait data
 nullt3_mi <- replicate(npermute, apply(tr_mi_z_d1, 2, sample), simplify = FALSE)
 
 # simulate null hypervolumes
-#sim_hyper3_mi <- lapply(nullt3_mi, hypervolume_svm)
+sim_hyper3_mi <- lapply(nullt3_mi, hypervolume_svm)
 
 # 119 secs (33 hours)
 
 # save: sim_hyper3_mi
-#saveRDS(sim_hyper3_mi, "data/df_sim_hyper3_mi.rds")
+saveRDS(sim_hyper3_mi, "data/df_sim_hyper3_mi.rds")
 
-# load: sim_hyper3_mi
-sim_hyper3_mi <- readRDS("data/df_sim_hyper3_mi.rds")
+# load: sim_hyper3_mi (not included on Github as the file is too big)
+#sim_hyper3_mi <- readRDS("data/df_sim_hyper3_mi.rds")
 
 # null hypervolume volumes
 sim_vol3_mi <- sapply(sim_hyper3_mi, function(x) return(x@Volume))
@@ -572,7 +537,7 @@ rtest_hyper3_mi <- ade4::as.randtest(obs = obs_hyper_mi, sim = sim_vol3_mi, alte
 rtest_hyper3_mi
 ```
 
-#### null model 4
+#### Null model 4 (see Diaz et al., 2016)
 
 ```{r}
 # correlation matrix
@@ -583,15 +548,15 @@ nullt4_mi <- replicate(npermute, scale(matrix(rnorm(ncol(tr_mi_z_d1) * nrow(tr_m
 nullt4_mi <- lapply(nullt4_mi, function(x) scale(x %*% chol(corM)))
 
 # simulate null hypervolumes
-#sim_hyper4_mi <- lapply(nullt4_mi, hypervolume_svm)
+sim_hyper4_mi <- lapply(nullt4_mi, hypervolume_svm)
 
 # 62 secs per hypervolme (17 hours for 999)
 
 # save: sim_hyper4_mi
-#saveRDS(sim_hyper4_mi, "data/df_sim_hyper4_mi.rds")
+saveRDS(sim_hyper4_mi, "data/df_sim_hyper4_mi.rds")
 
-# load: sim_hyper4_mi
-sim_hyper4_mi <- readRDS("data/df_sim_hyper4_mi.rds")
+# load: sim_hyper4_mi (not included on Github as the file is too big)
+#sim_hyper4_mi <- readRDS("data/df_sim_hyper4_mi.rds")
 
 # null hypervolume volumes
 sim_vol4_mi <- sapply(sim_hyper4_mi, function(x) return(x@Volume))
@@ -601,7 +566,7 @@ rtest_hyper4_mi <- ade4::as.randtest(obs = obs_hyper_mi, sim = sim_vol4_mi, alte
 rtest_hyper4_mi
 ```
 
-#### ratio between observed volume and null models
+#### Ratio between observed volume and null models
 
 ```{r}
 # null model 1
@@ -617,7 +582,7 @@ mean(obs_hyper_mi/sim_vol3_mi) * 100
 mean(obs_hyper_mi/sim_vol4_mi) * 100
 ```
 
-#### birds vs mammals (hypervolume overlap)
+#### Birds vs mammals (hypervolume overlap)
 
 ```{r}
 # dataframe of trait data for birds and mammals
@@ -668,7 +633,7 @@ bm_over_mi <- hypervolume::hypervolume_overlap_statistics(bm_set_mi)
 hypervolume::get_volume(bm_set_mi)
 ```
 
-# plot 3D hypervolumes for mammals and birds
+# Plot 3D hypervolumes for mammals and birds
 
 ```{r}
 bm_set_mi@HVList$HV1 <- NULL
@@ -692,7 +657,7 @@ hypervolume::plot.HypervolumeList(bm_set_mi, show.3d = TRUE, plot.3d.axes.id = c
 ## Step 6: extinction scenario ##
 #### --------------------------------------------------------------
 
-#### describe
+#### Perform probabilistic extinction scenarios
 
 ```{r}
 tr_mi_z_d1 <- tr_mi_z_d1 %>% 
@@ -709,7 +674,8 @@ tr_ex$ex = factor(tr_ex$ex, levels = c("LC", "NT", "VU", "EN", "CR"))
 
 # probabilities of extinction
 
-# moeers et al., 2008 100 years
+# moeers et al., 2008 
+# 100 years into the future
 probs_m100 <- c(0.0001, 0.01, 0.1, 0.667, 0.999)
 
 # sample data to predict extinctions
@@ -739,57 +705,57 @@ tr_ex_m100 <- lapply(1:npermute, function(x) {
   tibble::column_to_rownames(var = "binomial")
 })
 
-#hyper_ex_m100 <- lapply(tr_ex_m100, hypervolume_svm)
+hyper_ex_m100 <- lapply(tr_ex_m100, hypervolume_svm)
 
 # 57 secs per hypervolume (~16 hours for 999)
 
 # save: hyper_ex_m100
-#saveRDS(hyper_ex_m100, "data/hv_ex_m100.rds")
+saveRDS(hyper_ex_m100, "data/hv_ex_m100.rds")
 
-# load: hyper_ex_m100
-hyper_ex_m100 <- readRDS("data/hv_ex_m100.rds")
+# load: hyper_ex_m100 (not included on Github as the file is too big)
+#hyper_ex_m100 <- readRDS("data/hv_ex_m100.rds")
 
 exp_vol_m100 <- sapply(hyper_ex_m100, function(x) return(x@Volume)) %>% 
   as.data.frame()
 
 colnames(exp_vol_m100) <- c("vol")
 
-# null 1
+# null
 
-null_1_samp <- replicate(npermute, dplyr::sample_n(tr_ex, nrow(prob_ex_m100[[1]])), simplify = FALSE)
+null_samp <- replicate(npermute, dplyr::sample_n(tr_ex, nrow(prob_ex_m100[[1]])), simplify = FALSE)
 
-null_1 <- lapply(null_1_samp, function(x) {
+null <- lapply(null_samp, function(x) {
   a <- dplyr::filter(tr_ex, !binomial %in% x$binomial)
   b <- a %>% 
     dplyr::select(-ex) %>% 
     tibble::column_to_rownames(var = "binomial")})
 
-#null_1_hyper <- lapply(null_1, hypervolume_svm)
+null_hyper <- lapply(null, hypervolume_svm)
 
 # 47 secs per hypervolume (~13 hours for 999)
 
-# save: null_1_hyper
-#saveRDS(null_1_hyper, "data/hv_null_m100_hyper.rds")
+# save: null_hyper
+saveRDS(null_hyper, "data/hv_null_m100_hyper.rds")
 
-# load: null_1_hyper
-null_1_hyper <- readRDS("data/hv_null_1_hyper.rds")
+# load: null_hyper (not included on Github as the file is too big)
+#null_hyper <- readRDS("data/hv_null_m100_hyper.rds")
 
-null_1_vol <- sapply(null_1_hyper[1:npermute], function(x) return(x@Volume)) %>% 
+null_vol <- sapply(null_hyper[1:npermute], function(x) return(x@Volume)) %>% 
   as.data.frame()
 
-colnames(null_1_vol) <- c("vol")
+colnames(null_vol) <- c("vol")
 
 # compare predicted to null
 
 # kololmogorov-smirnov test
-ks.test(exp_vol_m100$vol, null_1_vol$vol, alternative = "greater") # greater - distributions for which x is stochastically smaller than y (the CDF of x lies above and hence to the left of that for y)
+ks.test(exp_vol_m100$vol, null_vol$vol, alternative = "greater") # greater - distributions for which x is stochastically smaller than y (the CDF of x lies above and hence to the left of that for y)
 
 # effect size
 obs_hyper@Volume - mean(exp_vol_m100$vol)
 
-obs_hyper@Volume - mean(null_1_vol$vol)
+obs_hyper@Volume - mean(null_vol$vol)
 
-diff <- data.frame(obs = rep(obs_hyper@Volume, npermute), exp = exp_vol_m100$vol, null = null_1_vol$vol) %>% 
+diff <- data.frame(obs = rep(obs_hyper@Volume, npermute), exp = exp_vol_m100$vol, null = null_vol$vol) %>% 
   dplyr::mutate(exp_diff = obs - exp) %>% 
   dplyr::mutate(null_diff = obs - null)
 
@@ -799,12 +765,11 @@ quantile(diff$null_diff, probs = c(0.025, 0.975))
 
 ```
 
-
-#### plot difference between projected and randomized
+#### Plot difference between projected and randomized scenarios
 
 ```{r}
 group <- c(rep("exp", npermute), rep("null", npermute))
-dat <- data.frame(vol = c(exp_vol_m100$vol, null_1_vol$vol), group = group)
+dat <- data.frame(vol = c(exp_vol_m100$vol, null_vol$vol), group = group)
 
 desc <- with(dat, psych::describeBy(x = vol, group = group))
 
@@ -839,7 +804,7 @@ dp <- ggplot(pd, aes(x = nam, y = mean, colour = nam)) +
 dp
 ```
 
-#### trait permutation tests
+#### Trait permutation tests
 
 ```{r}
 ## set up data ##
@@ -860,12 +825,12 @@ tr_ex_m100_td <- bind_rows(tr_ex_m100_td_prep, .id = "run")
 
 # null
 # same extinctions for non z-transformed data
-null_1_td <- lapply(null_1_samp, function(x) {
+null_td <- lapply(null_samp, function(x) {
   a <- filter(tr_mi, !binomial %in% x$binomial)
   b <- a %>% 
     column_to_rownames(var = "binomial")})
 
-tr_null_td <- bind_rows(null_1_td, .id = "run")
+tr_null_td <- bind_rows(null_td, .id = "run")
 
 td <- bind_rows(tr_ex_td, tr_ex_m100_td, .id = "df") %>% 
   mutate(df_run = paste0(df, "_", run))
