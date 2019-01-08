@@ -1,0 +1,953 @@
+---
+title: "Projected losses of global mammal and bird ecological strategies"
+author: "Robert Cooke"
+date: "04/12/2018"
+output: html_notebook
+---
+
+#### --------------------------------------------------------------
+## Step 0: setup ##
+#### --------------------------------------------------------------
+
+#### Set up required packages
+```{r}
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(dplyr, plyr, readr, tibble, FD, ade4, cowplot, mice, reshape2, tidyr, ks, hypervolume, alphahull, purrr, TTR, plotrix, agricolae, psych)
+
+# dplyr: used for data manipulation # calls: arrange, bind_rows, mutate, mutate_at, %>%, select, rename, filter, left_join
+# plyr: used for data manipulation
+# readr: used to read csvs # calls: read_csv
+# tibble: used to convert column to rownames and vice versa # calls: column_to_rownames, rownames_to_column
+# FD: calculates gower dissimilarity # calls: gowdis
+# ade4: principal coordinate analysis, permutation tests # calls: dudi.pco, as.randtest
+# cowplot: plotting # calls: ggplot
+# mice: multiple imputation with chained equations # calls: md.pattern, mice, complete
+# reshape2: data manipulation
+# tidyr: data manipulation # calls: nest, unnest
+# ks: kernel density estimation # calls: Hpi, kde
+# hypervolume: used to calculate hypervolumes # calls: hypervolume_svm, hypervolume_set, hypervolume_overlap_statistics, plot.HypervolumeList
+# alphahull: needed for contour plotting # called in plot.HypervolumeList
+# purrr: data manipulation # calls: map2
+# TTR: cumulative sd # calls: runSD
+# plotrix: se # calls: std.error
+# agricolae: kruskal-wallis test # calls: kruskal
+# psych: data manipulation # calls: decribeBy
+```
+
+#### --------------------------------------------------------------
+## Step 1: load ##
+#### --------------------------------------------------------------
+
+#### load data
+
+```{r}
+# load: trait data
+trait <- readr::read_csv("data/trait.csv")
+
+# load: extinction risk data
+iucn_ex <- readRDS("data/df_iucn_ex.rds")
+
+# load: class data
+bi_class <- readRDS("data/df_bi_class.rds")
+
+```
+
+#### --------------------------------------------------------------
+## Step 2: diet PCoA ##
+#### --------------------------------------------------------------
+
+#### calculate synthetic diet trait (principal component from a PCoA of 10 diet categories)
+
+```{r}
+diet_all <- trait %>% 
+  # select diet data
+  dplyr::select(binomial, contains("diet")) %>% 
+  # drop species with missing data: 1178
+  dplyr::filter(!is.na(diet_inv)) %>%   
+  # add species names to rownames (needed for gowdis function)
+  tibble::column_to_rownames(var = "binomial") %>% 
+  as.data.frame()
+
+# calculate species x species gower distance matrix based on traits
+diet_gd <- FD::gowdis(diet_all)
+
+# perform principal coordinates analysis (PCoA)
+diet_pco <- ade4::dudi.pco(diet_gd, scannf = FALSE)
+
+pc_diet <- diet_pco$tab
+
+summary(diet_pco)
+# Projected inertia Ax1 = 36.180
+# Projected inertia Ax2 = 15.729
+
+# principle component axes
+pcomp_diet <- as.data.frame(diet_pco$tab[,1:2]) %>% 
+  tibble::rownames_to_column(var = "binomial")
+
+# diet category projection
+n <- nrow(diet_all)
+points_stand <- scale(diet_pco$tab[,1:2])
+S <- cov(diet_all, points_stand)
+U <- S %*% diag((diet_pco$eig[1:2]/(n-1))^(-0.5))
+colnames(U) <- colnames(diet_pco$tab[,1:2])
+
+# diet categoires (see Wilman et al., 2014)
+U <- as.data.frame(U) %>% 
+  mutate(trait = c("Inv", "Vend", "Vect", "Vfish", "Vunk", "Scav", "Fruit", "Nect", "Seed", "Planto"))
+# Inv - Invertebrates # Vend - Vertebrate endotherms # Vect - Vertebrate ectotherms # Vfish - Fish # Vunk - Vertebrate unknown or general # Scav - Scavenge # Fruit - Fruit # Nect - Nectar # Seed - Seeds # Planto - Other plant material
+
+# scale diet category arrows
+mult <- min(
+  (max(pcomp_diet$A2) - min(pcomp_diet$A2)/(max(U$A2)-min(U$A2))),
+  (max(pcomp_diet$A1) - min(pcomp_diet$A1)/(max(U$A1)-min(U$A1)))
+)
+
+U <- U %>% 
+  mutate(v1 = 0.0003 * mult * A1) %>% 
+  mutate(v2 = 0.0003 * mult * A2)
+
+# plot diet PCoA
+pcoa_diet <- ggplot(pcomp_diet, aes(A1, A2)) +
+  # set up plot
+  geom_hline(yintercept = 0, size = 0.2, lty = 2, colour = "grey") + 
+  geom_vline(xintercept = 0, size = 0.2, lty = 2, colour = "grey") +
+  # add origin lines
+  #geom_text(alpha = 0.4, size = 1, aes(label = binomial))
+  geom_point() +
+  # add species
+  coord_equal() +
+  geom_segment(data = U, aes(x = 0, y = 0, xend = v1, yend = v2), arrow = arrow(length = unit(0.2, "cm")), colour = "darkgrey") +
+  # add arrows
+  geom_text(data = U, aes(x = v1, y = v2, label = trait), size = 4, colour = "darkgrey",
+            nudge_y = c(rep(0, 6), 0.005, 0.005, 0.0005, -0.004), 
+            nudge_x = c(0.005, rep(0, 7), -0.009, 0)) +
+  # add arrow labels
+  labs(x = "PC1 (36.2%)", y = "PC2 (15.7%)") +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text = element_text(colour = "black"),
+        legend.position = "none",
+        text = element_text(size = 20))
+
+pcoa_diet
+```
+
+#### --------------------------------------------------------------
+## Step 3: trait imputation ##
+#### --------------------------------------------------------------
+
+#### describe
+
+#### set up trait data (add diet PCoA axis)
+
+```{r}
+tr <- dplyr::select(trait, -contains("diet")) %>% 
+  # add PCoA diet data
+  dplyr::left_join(pcomp_diet, by = "binomial") %>% 
+  # add class data
+  dplyr::left_join(bi_class, by = "binomial") %>% 
+  # reorder variables + drop pc_diet2
+  dplyr::select(everything(), diet_pc1 = A1, class, -A2)
+```
+
+#### need to do imputation separately for mammals and birds, as we are using separate trees
+
+#### mammals
+
+```{r}
+tr_mam <- filter(tr, class == "Mammalia") %>% 
+  dplyr::select(-class)
+
+## phylogenetic data
+
+# load: t_pem_mam 
+t_pem_mam <- readRDS("data/df_t_pem_mam.rds")
+# phylogenetic eigenvectors matched to species names - using mammal supertree from Fritz et al., 2009 "Geographical variation in predictors of mammalian extinction risk: big is bad, but only in the tropics"
+
+# join trait and phylogenetic data (use first ten eigenvectors - Penone et al., 2014)
+tr_mam <- dplyr::left_join(tr_mam, t_pem_mam, by = "binomial")
+
+# missing data pattern
+mice::md.pattern(dplyr::select(tr_mam, -binomial, -c(V_1:V_10)))
+
+# run multiple imputation
+tr_mi_raw_mam <- mice(tr_mam, m = 25, maxit = 100, seed = 20)
+# method = pmm predictive mean matching
+
+# summary of multiple imputation results including predictor matrix (which variables were used to predict missing values)
+summary(tr_mi_raw_mam)
+
+# save: tr_mi_raw_mam
+saveRDS(tr_mi_raw_mam, "data/df_tr_mi_raw_mam.rds")
+# dataframe of raw multiple imputated trait data for mammals (data.frame)
+
+tr_mi_mam <- lapply(1:25, function(x) {
+  out <- mice::complete(tr_mi_raw_mam, action = x) %>% 
+    dplyr::select(binomial:diet_pc2) %>% 
+    # remove extinct species
+    filter(binomial != "Melomys rubicola") %>% 
+    filter(binomial != "Pipistrellus murrayi")
+})
+
+# save: tr_mi_mam
+saveRDS(tr_mi_mam, "data/df_tr_mi_mam.rds")
+# list of multiple imputed dataframes for mammals
+
+```
+
+#### birds
+
+```{r}
+tr_birds <- filter(tr, class == "Aves") %>% 
+  dplyr::select(-class)
+
+## phylogenetic data
+
+# load: t_pem_birds
+t_pem_birds <- readRDS("data/df_t_pem_birds.rds")
+# phylogenetic eigenvectors matched to species names - using Prum et al., 2015 "A comprehensive phylogeny of birds (Aves) using targeted next-generation DNA sequencing"
+
+# join trait and phylogenetic data (use first ten eigenvectors - Penone et al., 2014)
+tr_birds <- left_join(tr_birds, t_pem_birds, by = "binomial")
+
+# missing data pattern
+mice::md.pattern(dplyr::select(tr_birds, -binomial, -c(V_1:V_10)))
+
+# run multiple imputation
+tr_mi_raw_birds <- mice(tr_birds, m = 25, maxit = 100, seed = 20)
+# method = pmm predictive mean matching
+
+# summary of multiple imputation results including predictor matrix (which variables were used to predict missing values)
+summary(tr_mi_raw_birds)
+
+# save: tr_mi_raw_birds
+saveRDS(tr_mi_raw_birds, "data/df_tr_mi_raw_birds.rds")
+# dataframe of raw multiple imputated trait data for birds (data.frame)
+
+tr_mi_birds <- lapply(1:25, function(x) {
+  out <- mice::complete(tr_mi_raw_birds, action = x) %>% 
+    dplyr::select(binomial:diet_pc2) %>% 
+    # remove extinct species
+    filter(binomial != "Acrocephalus luscinius") %>% 
+    filter(binomial != "Zosterops conspicillatus")
+})
+
+# save: tr_mi_birds
+saveRDS(tr_mi_birds, "data/df_tr_mi_birds.rds")
+# list of multiple imputed dataframes for birds
+```
+
+#### combine mammal and bird trait data
+
+```{r}
+# combine mammals and birds
+tr_mi <- lapply(1:25, function(x) {
+  bind_rows(tr_mi_mam[x], tr_mi_birds[x]) %>% 
+    arrange(binomial)
+})
+  
+# save: tr_mi
+saveRDS(tr_mi, "data/df_tr_mi.rds")
+# list of multiple imputed dataframes
+```
+
+#### --------------------------------------------------------------
+## Step 4: PCA ##
+#### --------------------------------------------------------------
+
+```{r}
+#### z-transformation ####
+
+# function to z-transform data
+scale_z <- function(x){
+  (x - mean(x, na.rm=TRUE))/sd(x, na.rm=TRUE)
+}
+
+## tr_mi_z ##
+
+# z-transform trait data
+tr_mi_z <- lapply(1:25, function(x) {
+  tr_mi[[x]] %>%
+    # scale (zero mean and unit variance) all traits
+    dplyr::mutate_at(vars(body_mass_median:diet_pc2), funs(scale_z)) %>% 
+    # convert to true dataframe
+    as.data.frame
+})
+
+tr_mi_z_d1 <- lapply(1:25, function(x) {
+  tr_mi_z[[x]] %>% 
+    # add species names to rownames
+    tibble::column_to_rownames(var = "binomial") 
+})
+
+# run pca
+prin_mi_d1 <- lapply(1:25, function(x) {
+  princomp((tr_mi_z_d1[[x]]), cor = TRUE, scores = TRUE)
+})
+
+comp_var <- lapply(1:25, function(x) {prin_mi_d1[[x]]$sdev^2}) %>% 
+  dplyr::bind_cols() %>% 
+  dplyr::mutate_all(as.numeric) %>% 
+  dplyr::mutate(mean = apply(.[1:25], 1, mean))
+
+comp_var$mean/sum(comp_var$mean)
+
+comp_var$V2/sum(comp_var$V2)
+
+pc_mi_d1 <- lapply(1:25, function(x) {
+  # pca scores
+  as.data.frame(prin_mi_d1[[x]]$scores) %>% 
+    tibble::rownames_to_column("binomial") %>% 
+    # add identifier for each imputation dataset
+    dplyr::mutate(., mi = paste0("mi_", x))
+  }) %>% 
+  dplyr::bind_rows()
+
+# function to rescale data from 0-1
+rescale3 <- function(x){(x-min(x, na.rm = TRUE))/(max(x, na.rm = TRUE)-min(x, na.rm = TRUE))}
+
+pc_mi_d1 <- pc_mi_d1 %>% 
+  # convert long to wide
+  tidyr::gather(key, value, -binomial, -mi) %>% 
+  tidyr::unite(col, key, mi) %>% 
+  tidyr::spread(col, value) %>% 
+  # calculate mean per species for Comp.1
+  dplyr::mutate(Comp.1_mean = apply(dplyr::select(., contains("Comp.1")), 1, mean)) %>% 
+  # calculate variance for Comp.1
+  dplyr::mutate(Comp.1_B = apply(dplyr::select(., contains("Comp.1")), 1, var)) %>% 
+  # calculate Rubin's T for Comp.1
+  dplyr::mutate(Comp.1_T = Comp.1_B + Comp.1_B/25) %>% 
+  # standardize Rubin's T for Comp.1
+  dplyr::mutate(Comp.1_T_std = rescale3(-Comp.1_T)) %>% 
+  # repeat for other principal components
+  dplyr::mutate(Comp.2_mean = apply(dplyr::select(., contains("Comp.2")), 1, mean)) %>% 
+  dplyr::mutate(Comp.2_B = apply(dplyr::select(., contains("Comp.2")), 1, var)) %>% 
+  dplyr::mutate(Comp.2_T = Comp.2_B + Comp.2_B/25) %>% 
+  dplyr::mutate(Comp.2_T_std = rescale3(-Comp.2_T)) %>% 
+  dplyr::mutate(Comp.3_mean = apply(dplyr::select(., contains("Comp.3")), 1, mean)) %>% 
+  dplyr::mutate(Comp.3_B = apply(dplyr::select(., contains("Comp.3")), 1, var)) %>% 
+  dplyr::mutate(Comp.3_T = Comp.3_B + Comp.3_B/25) %>% 
+  dplyr::mutate(Comp.3_T_std = rescale3(-Comp.3_T)) %>% 
+  dplyr::mutate(Comp.4_mean = apply(dplyr::select(., contains("Comp.4")), 1, mean)) %>% 
+  dplyr::mutate(Comp.4_B = apply(dplyr::select(., contains("Comp.4")), 1, var)) %>% 
+  dplyr::mutate(Comp.4_T = Comp.4_B + Comp.4_B/25) %>% 
+  dplyr::mutate(Comp.4_T_std = rescale3(-Comp.4_T)) %>% 
+  dplyr::mutate(Comp.5_mean = apply(dplyr::select(., contains("Comp.5")), 1, mean)) %>% 
+  dplyr::mutate(Comp.5_B = apply(dplyr::select(., contains("Comp.5")), 1, var)) %>% 
+  dplyr::mutate(Comp.5_T = Comp.5_B + Comp.5_B/25) %>% 
+  dplyr::mutate(Comp.5_T_std = rescale3(-Comp.5_T))
+
+# loadings
+pcload_mi_d1 <- lapply(1:25, function(x) {
+  # extract pca loadings
+  as.data.frame(unclass(prin_mi_d1[[x]]$loadings)) %>% 
+    tibble::rownames_to_column("trait") %>% 
+    # add identifier for each imputation dataset
+    dplyr::mutate(., mi = paste0("mi_", x))
+}) %>% 
+  dplyr::bind_rows()
+
+pcload_mi_d1 <- pcload_mi_d1 %>% 
+    # convert long to wide
+  tidyr::gather(key, value, -trait, -mi) %>% 
+  tidyr::unite(col, key, mi) %>% 
+  tidyr::spread(col, value) %>% 
+  # calculate mean per species for Comp.1
+  dplyr::mutate(Comp.1_mean = apply(dplyr::select(., contains("Comp.1")), 1, mean)) %>% 
+  # calculate variance for Comp.1
+  dplyr::mutate(Comp.1_B = apply(dplyr::select(., contains("Comp.1")), 1, var)) %>% 
+  # calcualte Rubin's T for Comp.1
+  dplyr::mutate(Comp.1_T = Comp.1_B + Comp.1_B/25) %>% 
+  # standardize Rubin's T for Comp.1
+  dplyr::mutate(Comp.1_T_std = rescale3(-Comp.1_T)) %>% 
+  # repeat for other principal components
+  dplyr::mutate(Comp.2_mean = apply(dplyr::select(., contains("Comp.2")), 1, mean)) %>% 
+  dplyr::mutate(Comp.2_B = apply(dplyr::select(., contains("Comp.2")), 1, var)) %>% 
+  dplyr::mutate(Comp.2_T = Comp.2_B + Comp.2_B/25) %>% 
+  dplyr::mutate(Comp.2_T_std = rescale3(-Comp.2_T)) %>% 
+  dplyr::mutate(Comp.3_mean = apply(dplyr::select(., contains("Comp.3")), 1, mean)) %>% 
+  dplyr::mutate(Comp.3_B = apply(dplyr::select(., contains("Comp.3")), 1, var)) %>% 
+  dplyr::mutate(Comp.3_T = Comp.3_B + Comp.3_B/25) %>% 
+  dplyr::mutate(Comp.3_T_std = rescale3(-Comp.3_T)) %>% 
+  dplyr::mutate(Comp.4_mean = apply(dplyr::select(., contains("Comp.4")), 1, mean)) %>% 
+  dplyr::mutate(Comp.4_B = apply(dplyr::select(., contains("Comp.4")), 1, var)) %>% 
+  dplyr::mutate(Comp.4_T = Comp.4_B + Comp.4_B/25) %>% 
+  dplyr::mutate(Comp.4_T_std = rescale3(-Comp.4_T)) %>% 
+  dplyr::mutate(Comp.5_mean = apply(dplyr::select(., contains("Comp.5")), 1, mean)) %>% 
+  dplyr::mutate(Comp.5_B = apply(dplyr::select(., contains("Comp.5")), 1, var)) %>% 
+  dplyr::mutate(Comp.5_T = Comp.5_B + Comp.5_B/25) %>% 
+  dplyr::mutate(Comp.5_T_std = rescale3(-Comp.5_T)) 
+
+# scalar to adjust arrow size
+sc_mi <- 7
+
+pcload_mi_d1_sc <- pcload_mi_d1 %>% 
+  # rescale for arrow sizes
+  dplyr::mutate_at(vars(contains("Comp")), funs(.*sc_mi)) %>% 
+  # posh names
+  mutate(trait = c("Body mass", "Diet", "Generation length", "Habitat breadth", "Litter/clutch size"))
+
+# kernel density estimation
+pc_raw_mi_d1 <- pc_mi_d1 %>% 
+  # extract first two principal components
+  dplyr::select(., binomial, Comp.1_mean, Comp.2_mean) %>% 
+  tibble::column_to_rownames(var = "binomial")
+
+# optimal bandwidth estimation
+hpi_mi_d1 <- Hpi(x = pc_raw_mi_d1)
+
+# kernel density estimation    
+est_mi_d1 <- kde(x = pc_raw_mi_d1, H = hpi_mi_d1, compute.cont = TRUE)  
+
+den_mi_d1 <- list(est_mi_d1$eval.points[[1]], est_mi_d1$eval.points[[2]], est_mi_d1$estimate)
+names(den_mi_d1) <- c("x", "y", "z")
+dimnames(den_mi_d1$z) <- list(den_mi_d1$x, den_mi_d1$y)
+dcc_mi_d1 <- melt(den_mi_d1$z)
+
+# source: kernel function
+source("code/2.1.3-kernel-function.R")
+
+# 0.5 probability kernel
+cl_50_mi_d1 <- cl(df = den_mi_d1, prob = 0.50)
+# 0.95 probability kernel
+cl_95_mi_d1 <- cl(df = den_mi_d1, prob = 0.95)
+# 0.99 probability kernel
+cl_99_mi_d1 <- cl(df = den_mi_d1, prob = 0.99)
+```
+
+#### pca plot
+
+```{r}
+# colour palette
+col_pal <- colorRampPalette(c("red", "yellow", "white"))(200)
+
+# plot
+pca_plot_mi_d1 <- ggplot(dcc_mi_d1, aes(x = Var1, y = Var2)) +
+  # coloured probabilty background
+  geom_raster(aes(fill = value)) +
+  scale_fill_gradientn(colours = rev(col_pal)) +
+  # points for species
+  geom_point(data = pc_mi_d1, aes(x = Comp.1_mean, y = Comp.2_mean), size = 0.3, alpha = 0.5, colour = "grey20") +
+  # probability kernels
+  geom_contour(aes(z = value), breaks = cl_50_mi_d1, colour = "grey30", size = 1) +
+  geom_contour(aes(z = value), breaks = cl_95_mi_d1, colour = "grey60", size = 1) +
+  geom_contour(aes(z = value), breaks = cl_99_mi_d1, colour = "grey70", size = 1) +
+  coord_equal() +
+  # add arrows
+  geom_segment(data = pcload_mi_d1_sc, aes(x = 0, y = 0, xend = Comp.1_mean, yend = Comp.2_mean), arrow = arrow(length = unit(0.2, "cm")), colour = "black") +
+  # add dashed arrows ends
+  geom_segment(data = pcload_mi_d1_sc, aes(x = 0, y = 0, xend = -Comp.1_mean, yend = -Comp.2_mean), lty = 5, colour = "darkgrey") +
+  # add arrow labels
+  geom_text(data = pcload_mi_d1_sc, aes(x = Comp.1_mean, y = Comp.2_mean, label = trait), size = 6, nudge_x = c(0, 0, 0, 0, -0.2), nudge_y = c(0.2, -0.2, -0.2, -0.2, 0.2)) +
+  # axis labels
+  labs(x = "PC1 (34.1%)", y = "PC2 (26.0%)") +
+  # edit plot
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text = element_text(colour = "black"),
+        legend.position = "none",
+        text = element_text(size = 20))
+
+# display plot
+pca_plot_mi_d1
+```
+
+#### --------------------------------------------------------------
+## Step 5: hypervolumes ##
+#### --------------------------------------------------------------
+
+#### use single randomly selected trait imputation dataset
+
+```{r}
+# z-transform trait data
+tr_mi_z_d1 <- tr_mi[[2]] %>%
+  dplyr::mutate_at(vars(body_mass_median:diet_pc1), funs(scale_z)) %>% 
+  # scale (zero mean and unit variance) all traits
+  as.data.frame %>% 
+  # convert to true dataframe ato prevent 'Warning message: Setting row names on a tibble is deprecated.'
+  tibble::column_to_rownames(var = "binomial") %>% 
+  # add species names to rownames
+  dplyr::select(-diet_pc2)
+```
+
+#### observed hypervolume
+
+```{r}
+# calculate observed hypervolume
+#set.seed(3
+#obs_hyper_full_mi <- hypervolume::hypervolume_svm(tr_mi_z_d1)
+
+# save: obs_hyper_full_mi
+#saveRDS(obs_hyper_full_mi, "data/hv_obs_hyper.rds")
+
+# load: obs_hyper_full_mi
+obs_hyper_full_mi <- readRDS("data/hv_obs_hyper.rds")
+
+# observed volume
+obs_hyper_mi <- obs_hyper_full_mi@Volume
+```
+
+#### number of permutations for nulls
+
+```{r}
+# number of permutations
+npermute <- 999
+```
+
+#### null model 1 (see Diaz et al., 2016)
+
+```{r}
+# set up null trait data
+nullt1_mi <- replicate(npermute, apply(tr_mi_z_d1, 2, function(x) runif(nrow(tr_mi_z_d1), min = min(x), max = max(x))), simplify = FALSE)
+
+# simulate null hypervolumes
+#sim_hyper1_mi <- lapply(nullt1_mi, hypervolume_svm)
+
+# 39 secs per hypervolume (11 hours for 999 hypervolumes)
+
+# save: sim_hyper1_mi
+#saveRDS(sim_hyper1_mi, "data/df_sim_hyper1_mi.rds")
+
+# load: sim_hyper1_mi
+sim_hyper1_mi <- readRDS("data/df_sim_hyper1_mi.rds")
+
+# null hypervolume volumes
+sim_vol1_mi <- sapply(sim_hyper1_mi, function(x) return(x@Volume))
+
+# Permutation test between observed hypervolume and simulated hypervolumes
+rtest_hyper1_mi <- ade4::as.randtest(obs = obs_hyper_mi, sim = sim_vol1_mi, alter = "less")
+rtest_hyper1_mi
+```
+
+#### null model 2
+
+```{r}
+# set up null trait data
+nullt2_mi <- replicate(npermute, scale(matrix(rnorm(ncol(tr_mi_z_d1) * nrow(tr_mi_z_d1)), nrow(tr_mi_z_d1), ncol(tr_mi_z_d1))), simplify = FALSE)
+
+# add column names for hypervolume function
+nullt2_mi <- lapply(nullt2_mi, function(x) {colnames(x) <- colnames(tr_mi_z_d1); x})
+
+# simulate null hypervolumes
+#sim_hyper2_mi <- lapply(nullt2_mi, hypervolume_svm)
+
+# 145 secs per hypervolume (40 hours for 999)
+
+# save: sim_hyper2_mi
+#saveRDS(sim_hyper2_mi, "data/df_sim_hyper2_mi.rds")
+
+# load: sim_hyper2_mi
+sim_hyper2_mi <- readRDS("data/df_sim_hyper2_mi.rds")
+
+# null hypervolume volumes
+sim_vol2_mi <- sapply(sim_hyper2_mi, function(x) return(x@Volume))
+
+# Permutation test between observed hypervolume and simulated hypervolumes
+rtest_hyper2_mi <- ade4::as.randtest(obs = obs_hyper_mi, sim = sim_vol2_mi, alter = "less")
+rtest_hyper2_mi
+```
+
+#### null model 3
+
+```{r}
+# set up null trait data
+nullt3_mi <- replicate(npermute, apply(tr_mi_z_d1, 2, sample), simplify = FALSE)
+
+# simulate null hypervolumes
+#sim_hyper3_mi <- lapply(nullt3_mi, hypervolume_svm)
+
+# 119 secs (33 hours)
+
+# save: sim_hyper3_mi
+#saveRDS(sim_hyper3_mi, "data/df_sim_hyper3_mi.rds")
+
+# load: sim_hyper3_mi
+sim_hyper3_mi <- readRDS("data/df_sim_hyper3_mi.rds")
+
+# null hypervolume volumes
+sim_vol3_mi <- sapply(sim_hyper3_mi, function(x) return(x@Volume))
+
+# Permutation test between observed hypervolume and simulated hypervolumes
+rtest_hyper3_mi <- ade4::as.randtest(obs = obs_hyper_mi, sim = sim_vol3_mi, alter = "less")
+rtest_hyper3_mi
+```
+
+#### null model 4
+
+```{r}
+# correlation matrix
+corM <- cor(tr_mi_z_d1)
+
+# set up null trait data
+nullt4_mi <- replicate(npermute, scale(matrix(rnorm(ncol(tr_mi_z_d1) * nrow(tr_mi_z_d1)), nrow(tr_mi_z_d1), ncol(tr_mi_z_d1))), simplify = FALSE)
+nullt4_mi <- lapply(nullt4_mi, function(x) scale(x %*% chol(corM)))
+
+# simulate null hypervolumes
+#sim_hyper4_mi <- lapply(nullt4_mi, hypervolume_svm)
+
+# 62 secs per hypervolme (17 hours for 999)
+
+# save: sim_hyper4_mi
+#saveRDS(sim_hyper4_mi, "data/df_sim_hyper4_mi.rds")
+
+# load: sim_hyper4_mi
+sim_hyper4_mi <- readRDS("data/df_sim_hyper4_mi.rds")
+
+# null hypervolume volumes
+sim_vol4_mi <- sapply(sim_hyper4_mi, function(x) return(x@Volume))
+
+# Permutation test between observed hypervolume and simulated hypervolumes
+rtest_hyper4_mi <- ade4::as.randtest(obs = obs_hyper_mi, sim = sim_vol4_mi, alter = "less")
+rtest_hyper4_mi
+```
+
+#### ratio between observed volume and null models
+
+```{r}
+# null model 1
+mean(obs_hyper_mi/sim_vol1_mi) * 100
+
+# null model 2
+mean(obs_hyper_mi/sim_vol2_mi) * 100
+
+# null model 3
+mean(obs_hyper_mi/sim_vol3_mi) * 100
+
+# null model 4
+mean(obs_hyper_mi/sim_vol4_mi) * 100
+```
+
+#### birds vs mammals (hypervolume overlap)
+
+```{r}
+# dataframe of trait data for birds and mammals
+tr_mi_z_d1_bm <- tr_mi_z_d1 %>% 
+  tibble::rownames_to_column(var = "binomial") %>% 
+  dplyr::left_join(bi_class, by = "binomial")
+
+# birds trait data
+tr_mi_z_d1_b <- tr_mi_z_d1_bm %>% 
+  dplyr::filter(class == "Aves") %>% 
+  dplyr::select(-class) %>% 
+  tibble::column_to_rownames("binomial")
+
+# mammals trait data
+tr_mi_z_d1_m <- tr_mi_z_d1_bm %>% 
+  dplyr::filter(class == "Mammalia") %>% 
+  dplyr::select(-class) %>% 
+  tibble::column_to_rownames("binomial")
+
+# birds hypervolume
+#set.seed(3)
+#birds_hyper_mi <- hypervolume::hypervolume_svm(tr_mi_z_d1_b, name = "birds")
+
+# save: birds_hyper_mi
+#saveRDS(birds_hyper_mi, "data/hv_birds_hyper_mi.rds")
+
+# load: birds_hyper_mi
+birds_hyper_mi <- readRDS("data/hv_birds_hyper_mi.rds")
+
+# mammals hypervolume
+#set.seed(3)
+#mams_hyper_mi <- hypervolume::hypervolume_svm(tr_mi_z_d1_m, name = "mammals")
+
+# save: mams_hyper_mi
+#saveRDS(mams_hyper_mi, "data/hv_mams_hyper_mi.rds")
+
+# load: mams_hyper_mi
+mams_hyper_mi <- readRDS("data/hv_mams_hyper_mi.rds")
+
+# set mammals and birds hypervolumes
+set.seed(3)
+bm_set_mi <- hypervolume::hypervolume_set(birds_hyper_mi, mams_hyper_mi, check.memory = FALSE)
+
+# overlap statistics
+bm_over_mi <- hypervolume::hypervolume_overlap_statistics(bm_set_mi)
+
+# summarise volumes
+hypervolume::get_volume(bm_set_mi)
+```
+
+# plot 3D hypervolumes for mammals and birds
+
+```{r}
+bm_set_mi@HVList$HV1 <- NULL
+bm_set_mi@HVList$HV2 <- NULL
+bm_set_mi@HVList$Union <- NULL
+
+# trait names
+names <- c("Body mass", "Litter/clutch size", "Generation length", "Habitat breadth", "Diet")
+
+colnames(bm_set_mi@HVList$Intersection@RandomPoints) <- names
+colnames(bm_set_mi@HVList$Unique_1@RandomPoints) <- names
+colnames(bm_set_mi@HVList$Unique_2@RandomPoints) <- names
+
+colnames(bm_set_mi@HVList$Intersection@RandomPoints)
+
+# plot hypervolumes for mammals and birds
+hypervolume::plot.HypervolumeList(bm_set_mi, show.3d = TRUE, plot.3d.axes.id = c(1,5,3), show.random = FALSE, show.data = TRUE, show.centroid = FALSE, show.density = FALSE, cex.random = 5, colors = c("#C77CFF", "#F8766D","#00BFC4"))
+```
+
+#### --------------------------------------------------------------
+## Step 6: extinction scenario ##
+#### --------------------------------------------------------------
+
+#### describe
+
+```{r}
+tr_mi_z_d1 <- tr_mi_z_d1 %>% 
+  tibble::rownames_to_column(var = "binomial")
+
+# add extinction risk data
+tr_ex <- left_join(tr_mi_z_d1, iucn_ex, by = "binomial") %>% 
+  # DD species treated as LC
+  mutate(ex = ifelse(ex == "DD", "LC", ex)) %>% 
+  # EW species treated as CR
+  mutate(ex = ifelse(ex == "EW", "CR", ex))
+
+tr_ex$ex = factor(tr_ex$ex, levels = c("LC", "NT", "VU", "EN", "CR"))
+
+# probabilities of extinction
+
+# moeers et al., 2008 100 years
+probs_m100 <- c(0.0001, 0.01, 0.1, 0.667, 0.999)
+
+# sample data to predict extinctions
+prob_ex_m100 <- replicate(npermute, tr_ex %>% 
+                            # group by IUCN category
+                            dplyr::group_by(ex) %>%
+                            # nest columns within dataframe
+                            tidyr::nest() %>%
+                            dplyr::arrange(ex) %>% 
+                            # sample frac per IUCN category to probability of extinctions
+                            dplyr::mutate(samp = purrr::map2(data, probs_m100, sample_frac)) %>% 
+                            # select data
+                            dplyr::select(ex, samp) %>% 
+                            # unnest - turn data back into dataframe
+                            tidyr::unnest(), simplify = FALSE)
+
+table(prob_ex_m100[[1]]$ex)
+
+## Extinction risk scenario
+
+## Mooers 100 years - 1,095 spp
+tr_ex_m100 <- lapply(1:npermute, function(x) {
+  tr_ex %>% 
+  # remove species predicted to go extinct
+  dplyr::filter(!(binomial %in% prob_ex_m100[[x]]$binomial)) %>% 
+  dplyr::select(-ex) %>% 
+  tibble::column_to_rownames(var = "binomial")
+})
+
+#hyper_ex_m100 <- lapply(tr_ex_m100, hypervolume_svm)
+
+# 57 secs per hypervolume (~16 hours for 999)
+
+# save: hyper_ex_m100
+#saveRDS(hyper_ex_m100, "data/hv_ex_m100.rds")
+
+# load: hyper_ex_m100
+hyper_ex_m100 <- readRDS("data/hv_ex_m100.rds")
+
+exp_vol_m100 <- sapply(hyper_ex_m100, function(x) return(x@Volume)) %>% 
+  as.data.frame()
+
+colnames(exp_vol_m100) <- c("vol")
+
+# null 1
+
+null_1_samp <- replicate(npermute, dplyr::sample_n(tr_ex, nrow(prob_ex_m100[[1]])), simplify = FALSE)
+
+null_1 <- lapply(null_1_samp, function(x) {
+  a <- dplyr::filter(tr_ex, !binomial %in% x$binomial)
+  b <- a %>% 
+    dplyr::select(-ex) %>% 
+    tibble::column_to_rownames(var = "binomial")})
+
+#null_1_hyper <- lapply(null_1, hypervolume_svm)
+
+# 47 secs per hypervolume (~13 hours for 999)
+
+# save: null_1_hyper
+#saveRDS(null_1_hyper, "data/hv_null_m100_hyper.rds")
+
+# load: null_1_hyper
+null_1_hyper <- readRDS("data/hv_null_1_hyper.rds")
+
+null_1_vol <- sapply(null_1_hyper[1:npermute], function(x) return(x@Volume)) %>% 
+  as.data.frame()
+
+colnames(null_1_vol) <- c("vol")
+
+# compare predicted to null
+
+# kololmogorov-smirnov test
+ks.test(exp_vol_m100$vol, null_1_vol$vol, alternative = "greater") # greater - distributions for which x is stochastically smaller than y (the CDF of x lies above and hence to the left of that for y)
+
+# effect size
+obs_hyper@Volume - mean(exp_vol_m100$vol)
+
+obs_hyper@Volume - mean(null_1_vol$vol)
+
+diff <- data.frame(obs = rep(obs_hyper@Volume, npermute), exp = exp_vol_m100$vol, null = null_1_vol$vol) %>% 
+  dplyr::mutate(exp_diff = obs - exp) %>% 
+  dplyr::mutate(null_diff = obs - null)
+
+quantile(diff$exp_diff, probs = c(0.025, 0.975))
+
+quantile(diff$null_diff, probs = c(0.025, 0.975))
+
+```
+
+
+#### plot difference between projected and randomized
+
+```{r}
+group <- c(rep("exp", npermute), rep("null", npermute))
+dat <- data.frame(vol = c(exp_vol_m100$vol, null_1_vol$vol), group = group)
+
+desc <- with(dat, psych::describeBy(x = vol, group = group))
+
+nam <- names(desc)
+mean <- c(desc$exp$mean, desc$null$mean)
+se <- c(desc$exp$se, desc$null$se)
+pd <- data.frame(nam, mean, se)
+
+# reorder scenarios
+pd$nam <- reorder(pd$nam, -pd$mean)
+
+dp <- ggplot(pd, aes(x = nam, y = mean, colour = nam)) +
+  # plot empty data - ensures scenarios stay in order
+  geom_point(colour = "white") +
+  # add line for observed extant volume
+  geom_hline(yintercept = obs_hyper@Volume, lty = 2, lwd = 1) +  
+  # add jittered points
+  geom_jitter(data = dat, aes(x = group, y = vol, colour = group), alpha = 0.2, width = 0.25) +
+  # add violin of data density
+  geom_violin(data = dat, aes(x = group, y = vol, colour = group), fill = NA, lwd = 0.5, width = 0.5) +
+  # add mean and CI
+  geom_crossbar(data = pd, aes(ymax = mean, ymin = mean), width = 0.4) +
+  # rename x tick marks
+  scale_x_discrete(labels = c("obs" = "Extant", "null" = "Randomized extinction", "exp" = "Projected extinction")) +
+  # manually select colours
+  scale_colour_manual(values = c("#FF7F45", "darkgrey", "black")) +
+  # labels
+  labs(x = "", y = bquote("Volume "~(SD^5))) +
+  # edit graph
+  theme(legend.position = "none")
+
+dp
+```
+
+#### trait permutation tests
+
+```{r}
+## set up data ##
+
+# observed
+tr_ex_td <- dplyr::select(tr_mi, body_mass_median:diet_pc1) %>% 
+  mutate(run = as.character(1))
+
+# expected
+tr_ex_m100_td_prep <- lapply(1:npermute, function(x) {
+  tr_mi %>% 
+    # remove species predicted to go extinct
+    filter(!(binomial %in% prob_ex_m100[[x]]$binomial)) %>% 
+    column_to_rownames(var = "binomial")
+})
+
+tr_ex_m100_td <- bind_rows(tr_ex_m100_td_prep, .id = "run")
+
+# null
+# same extinctions for non z-transformed data
+null_1_td <- lapply(null_1_samp, function(x) {
+  a <- filter(tr_mi, !binomial %in% x$binomial)
+  b <- a %>% 
+    column_to_rownames(var = "binomial")})
+
+tr_null_td <- bind_rows(null_1_td, .id = "run")
+
+td <- bind_rows(tr_ex_td, tr_ex_m100_td, .id = "df") %>% 
+  mutate(df_run = paste0(df, "_", run))
+
+## body mass ##
+
+# mean body mass across runs
+bm_mean <- tr_ex_m100_td %>% 
+  group_by(run) %>% 
+  summarise_at(vars(body_mass_median), funs(mean)) %>% 
+  mutate(body_mass_median = 10^body_mass_median) %>% 
+  mutate(red = 100 - 10^mean(tr_ex_td$body_mass_median) / body_mass_median * 100)
+
+# compare observed mean body mass to predicted mean body mass (999 runs)
+tbm <- as.randtest(obs = 10^mean(tr_ex_td$body_mass_median), sim = bm_mean$body_mass_median, alter = "two-sided")
+tbm
+plot(tbm, main = "", xlab = "body mass (g)")
+
+## generation length ##
+
+# mean generation length across runs
+gl_mean <- tr_ex_m100_td %>% 
+  group_by(run) %>% 
+  summarise_at(vars(GL), funs(mean)) %>% 
+  mutate(GL = 10^GL) %>% 
+  mutate(red = 100 - 10^mean(tr_ex_td$GL) / GL * 100)
+
+# compare observed mean GL to predicted mean GL (999 runs)
+tgl <- as.randtest(obs = 10^mean(tr_ex_td$GL), sim = gl_mean$GL, alter = "two-sided")
+tgl
+plot(tgl, main = "", xlab = "generation length (years)")
+
+## litter/clutch size ##
+
+# mean litter/clutch size across runs
+ls_mean <- tr_ex_m100_td %>% 
+  group_by(run) %>% 
+  summarise_at(vars(litter_clutch_size), funs(mean)) %>% 
+  mutate(litter_clutch_size = 10^litter_clutch_size) %>% 
+  mutate(red = 100 - 10^mean(tr_ex_td$litter_clutch_size) / litter_clutch_size * 100)
+
+# compare observed mean litter/clutch size to predicted mean litter/clutch size
+tls <- as.randtest(obs = 10^mean(tr_ex_td$litter_clutch_size), sim = ls_mean$litter_clutch_size, alter = "two-sided")
+tls
+plot(tls, main = "", xlab = "litter/clutch size")
+
+## habitat breadth ##
+
+# mean habitat breadth across runs
+hb_mean <- tr_ex_m100_td %>% 
+  group_by(run) %>% 
+  summarise_at(vars(hab_breadth), funs(mean)) %>% 
+  mutate(hab_breadth = hab_breadth^2) %>% 
+  mutate(red = 100 - mean(tr_ex_td$hab_breadth)^2 / hab_breadth * 100)
+
+# compare observed mean habitat breadth to predicted mean habitat breadth
+thb <- as.randtest(obs = mean(tr_ex_td$hab_breadth)^2, sim = hb_mean$hab_breadth, alter = "two-sided")
+thb
+plot(thb, main = "", xlab = "habitat breadth")
+
+## diet ##
+
+# mean diet across runs
+di_mean <- tr_ex_m100_td %>% 
+  group_by(run) %>% 
+  summarise_at(vars(diet_pc1), funs(mean)) %>% 
+  mutate(diet_pc1 = diet_pc1) %>% 
+  mutate(red = 100 - mean(tr_ex_td$diet_pc1) / diet_pc1 * 100)
+
+# compare observed mean diet to predicted mean diet
+tdi <- as.randtest(obs = mean(tr_ex_td$diet_pc1), sim = di_mean$diet_pc1, alter = "two-sided")
+tdi
+plot(tdi, main = "", xlab = "diet")
+
+# plot all permutation plots together
+png(filename = "outputs/perm_plots.png", width = 14, height = 10, units = "in", res = 300)
+par(mfrow = c(2,3))
+plot(tbm, main = "", xlab = "Body mass (g)")
+plot(tgl, main = "", xlab = "Generation length (years)")
+plot(thb, main = "", xlab = "Litter/clutch size")
+plot(thb, main = "", xlab = "Habitat breadth")
+plot(tdi, main = "", xlab = "Diet")
+dev.off()
+```
+
