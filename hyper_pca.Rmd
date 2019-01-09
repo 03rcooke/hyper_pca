@@ -377,7 +377,7 @@ cl_95_mi_d1 <- cl(df = den_mi_d1, prob = 0.95)
 cl_99_mi_d1 <- cl(df = den_mi_d1, prob = 0.99)
 
 # save principal component data
-write.csv()
+write.csv(pc_mi_d1, file = "data/pc.csv", row.names = FALSE)
 ```
 
 #### PCA plot
