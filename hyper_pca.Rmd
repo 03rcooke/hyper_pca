@@ -366,8 +366,15 @@ names(den_mi_d1) <- c("x", "y", "z")
 dimnames(den_mi_d1$z) <- list(den_mi_d1$x, den_mi_d1$y)
 dcc_mi_d1 <- melt(den_mi_d1$z)
 
-# source: kernel function
-source("code/2.1.3-kernel-function.R")
+# kernel function
+
+cl <- function(df, prob) {
+  dx <- diff(df$x[1:2])
+  dy <- diff(df$y[1:2])
+  sz <- sort(df$z)
+  c1 <- cumsum(sz) * dx * dy
+  approx(c1, sz, xout = 1 - prob)$y
+}
 
 # 0.5 probability kernel
 cl_50_mi_d1 <- cl(df = den_mi_d1, prob = 0.50)
