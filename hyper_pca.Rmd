@@ -693,7 +693,6 @@ prob_ex_m100 <- replicate(npermute, tr_ex %>%
                             dplyr::group_by(ex) %>%
                             # nest columns within dataframe
                             tidyr::nest() %>%
-                            dplyr::arrange(ex) %>% 
                             # sample frac per IUCN category to probability of extinctions
                             dplyr::mutate(samp = purrr::map(data, ~sample_frac(., unique(.$prob)))) %>% 
                             # select data
