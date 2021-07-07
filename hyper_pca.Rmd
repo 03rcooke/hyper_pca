@@ -679,25 +679,27 @@ tr_ex <- left_join(tr_mi_z_d1, iucn_ex, by = "binomial") %>%
 
 tr_ex$ex = factor(tr_ex$ex, levels = c("LC", "NT", "VU", "EN", "CR"))
 
-# probabilities of extinction
-
-# moeers et al., 2008 
-# 100 years into the future
-probs_m100 <- c(0.0001, 0.01, 0.1, 0.667, 0.999)
-
 # sample data to predict extinctions
 prob_ex_m100 <- replicate(npermute, tr_ex %>% 
+                            # extinction probabilities - moeers et al., 2008 
+                            # 100 years into the future
+                            dplyr::mutate(prob = dplyr::recode(ex, 
+                                                               LC = 0.0001,
+                                                               NT = 0.01,
+                                                               VU = 0.1,
+                                                               EN = 0.667,
+                                                               CR = 0.999)) %>% 
                             # group by IUCN category
                             dplyr::group_by(ex) %>%
                             # nest columns within dataframe
                             tidyr::nest() %>%
                             dplyr::arrange(ex) %>% 
                             # sample frac per IUCN category to probability of extinctions
-                            dplyr::mutate(samp = purrr::map2(data, probs_m100, sample_frac)) %>% 
+                            dplyr::mutate(samp = purrr::map(data, ~sample_frac(., unique(.$prob)))) %>% 
                             # select data
                             dplyr::select(ex, samp) %>% 
                             # unnest - turn data back into dataframe
-                            tidyr::unnest(), simplify = FALSE)
+                            tidyr::unnest(cols = c(samp)), simplify = FALSE)
 
 table(prob_ex_m100[[1]]$ex)
 
